@@ -254,6 +254,8 @@ def build_tokenizer(args):
                     trust_remote_code=True
                 )
                 self.extra_vocab_size = extra_vocab_size
+                self._vocab = self.tokenizer.get_vocab()
+                self._inv_vocab = {v: k for k, v in self._vocab.items()}
 
             def __call__(self, text, return_tensors=None,
                          padding=None, max_length=None, truncation=None, add_special_tokens=None):
@@ -266,15 +268,15 @@ def build_tokenizer(args):
 
             @property
             def vocab_size(self):
-                return len(self.tokenizer.encoder) + self.extra_vocab_size
+                return len(self._vocab) + self.extra_vocab_size
 
             @property
             def vocab(self):
-                return self.tokenizer.encoder
+                return self._vocab
 
             @property
             def inv_vocab(self):
-                return self.tokenizer.decoder
+                return self._inv_vocab
 
             def tokenize(self, text):
                 return self.tokenizer.encode(text)
@@ -298,7 +300,7 @@ def build_tokenizer(args):
             def eos_token_id(self):
                 return self.tokenizer.eos_token_id
 
-        tokenizer = _Qwen3Tokenizer(args.load, args.extra_vocab_size)
+        tokenizer = _Qwen3Tokenizer(args.save, args.extra_vocab_size)
         args.padded_vocab_size = tokenizer.vocab_size
 
     elif args.patch_tokenizer_type == 'Qwen2VLTokenizer':

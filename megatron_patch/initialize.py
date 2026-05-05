@@ -32,8 +32,12 @@ def initialize_megatron(
     (optionally, only when args.lazy_mpu_init == True)
     """
     if not allow_no_cuda:
-        # Make sure cuda is available.
-        assert torch.cuda.is_available(), "Megatron requires CUDA."
+        if not torch.cuda.is_available():
+            import warnings
+            warnings.warn(
+                "CUDA is not available. Running Megatron in CPU-only mode. "
+                "This is not officially supported and may have performance or correctness issues."
+            )
 
     # Parse arguments
     args = parse_args(extra_args_provider, ignore_unknown_args)
