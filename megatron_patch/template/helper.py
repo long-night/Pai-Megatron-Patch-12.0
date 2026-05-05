@@ -193,8 +193,8 @@ def forward_step(data_iterator, model):
     timers("batch-generator", log_level=2).start()
     tokens, labels, loss_mask, attention_mask, position_ids, num_seqs, packed_seq_params = get_batch(data_iterator)
     timers("batch-generator").stop()
-    print_model_weight(model)
-    print_model_data(tokens, labels, loss_mask, attention_mask, position_ids)
+    # print_model_weight(model)
+    # print_model_data(tokens, labels, loss_mask, attention_mask, position_ids)
 
     if 'loss_mask' in inspect.signature(GPTModel.forward).parameters:
         # NOTE: MTP-head (since 0328) requires loss_mask to compute correct loss scale.

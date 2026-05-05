@@ -45,6 +45,28 @@ from megatron.training import get_args, pretrain, print_rank_0
 torch._dynamo.config.suppress_errors = True
 
 
+# ModelPerf Hook integration (CPU environment, no GPU required)
+def _setup_modelperf_hook():
+    import sys
+    import os
+    modelperf_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))),
+        'ModelPerf'
+    )
+    if modelperf_path not in sys.path:
+        sys.path.insert(0, modelperf_path)
+    try:
+        from modelperf.framework_adapter import register_pai_patch_hooks
+        export_dir = os.path.join(modelperf_path, 'examples', 'output', 'captured_configs')
+        os.makedirs(export_dir, exist_ok=True)
+        hook_manager = register_pai_patch_hooks(export_dir=export_dir)
+        print_rank_0(f'[ModelPerf] Hook registered. Configs will export to {export_dir}')
+        return hook_manager
+    except Exception as e:
+        print_rank_0(f'[ModelPerf] Warning: Failed to register hook: {e}')
+        return None
+
+
 def model_provider(pre_process=True, post_process=True) -> Union[GPTModel]:
     """Builds the model.
 
@@ -59,6 +81,26 @@ def model_provider(pre_process=True, post_process=True) -> Union[GPTModel]:
         Union[GPTModel]: The returned model
     """
     args = get_args()
+
+    # ModelPerf: extract configs directly from parsed args (most reliable method)
+    try:
+        import sys
+        import os
+        modelperf_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))),
+            'ModelPerf'
+        )
+        if modelperf_path not in sys.path:
+            sys.path.insert(0, modelperf_path)
+        from modelperf.framework_adapter.config_extractor import ConfigExtractor
+        extractor = ConfigExtractor()
+        extractor.extract_from_args(args)
+        export_dir = os.path.join(modelperf_path, 'examples', 'output', 'captured_configs')
+        os.makedirs(export_dir, exist_ok=True)
+        extractor.export_json(export_dir)
+        print_rank_0(f'[ModelPerf] Configs extracted and exported to {export_dir}')
+    except Exception as e:
+        print_rank_0(f'[ModelPerf] Warning: Failed to extract configs: {e}')
     build_tokenizer(args)
     use_te = args.transformer_impl == "transformer_engine"
 
@@ -140,16 +182,90 @@ def model_provider(pre_process=True, post_process=True) -> Union[GPTModel]:
             mtp_block_spec=mtp_block_spec,
         )
 
+    _setup_modelperf_graph_capture(model)
+
     return model
+
+
+# ModelPerf: capture computational graph during training
+def _setup_modelperf_graph_capture(model):
+    import sys
+    import os
+    modelperf_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))),
+        'ModelPerf'
+    )
+    if modelperf_path not in sys.path:
+        sys.path.insert(0, modelperf_path)
+    try:
+        from modelperf.capture.module_hook import ModuleCapture
+        from modelperf.capture.comm_hook import install_communication_hooks
+        from modelperf.capture.graph import ComputationalGraph
+
+        graph = ComputationalGraph()
+
+        module_capture = ModuleCapture(graph)
+        module_capture.capture(model)
+
+        comm_capture = install_communication_hooks(graph)
+
+        _modelperf_captures['module'] = module_capture
+        _modelperf_captures['comm'] = comm_capture
+
+        module_capture.start()
+        comm_capture.start()
+
+        print_rank_0(f'[ModelPerf] Graph capture started: ModuleCapture + CommunicationCapture')
+    except Exception as e:
+        print_rank_0(f'[ModelPerf] Warning: Failed to start graph capture: {e}')
+
+
+def _stop_modelperf_graph_capture():
+    try:
+        if 'module' in _modelperf_captures:
+            _modelperf_captures['module'].stop()
+        if 'comm' in _modelperf_captures:
+            _modelperf_captures['comm'].stop()
+
+        import os
+        import json
+        modelperf_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))),
+            'ModelPerf'
+        )
+        export_dir = os.path.join(modelperf_path, 'examples', 'output', 'captured_graph')
+        os.makedirs(export_dir, exist_ok=True)
+
+        graph = _modelperf_captures.get('module')
+        if graph is not None:
+            graph_obj = graph.get_graph()
+            graph_path = os.path.join(export_dir, 'computational_graph.json')
+            with open(graph_path, 'w') as f:
+                json.dump(graph_obj.to_dict(), f, indent=2)
+            print_rank_0(f'[ModelPerf] Graph exported to {graph_path}: '
+                         f'{len(graph_obj.nodes)} nodes, {len(graph_obj.get_comm_nodes())} comm')
+    except Exception as e:
+        print_rank_0(f'[ModelPerf] Warning: Failed to export graph: {e}')
+
+
+_modelperf_captures = {}
 
 if __name__ == "__main__":
     from megatron_patch.template.helper import forward_step
     train_valid_test_datasets_provider.is_distributed = True
 
-    pretrain(
-        train_valid_test_datasets_provider,
-        model_provider,
-        ModelType.encoder_or_decoder,
-        forward_step,
-        extra_args_provider=get_patch_args,
-    )
+    _modelperf_hook_manager = _setup_modelperf_hook()
+
+    try:
+        pretrain(
+            train_valid_test_datasets_provider,
+            model_provider,
+            ModelType.encoder_or_decoder,
+            forward_step,
+            extra_args_provider=get_patch_args,
+        )
+    finally:
+        if _modelperf_hook_manager is not None:
+            _modelperf_hook_manager.uninstall()
+            print_rank_0('[ModelPerf] Hook uninstalled')
+        _stop_modelperf_graph_capture()
