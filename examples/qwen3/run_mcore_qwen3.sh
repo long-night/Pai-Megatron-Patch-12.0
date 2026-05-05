@@ -1,9 +1,9 @@
 #!/bin/bash
-set -e
+set -ex
 ENV=$1
 CURRENT_DIR="$( cd "$( dirname "$0" )" && pwd )"
 MEGATRON_PATCH_PATH=$( dirname $( dirname ${CURRENT_DIR}))
-export PYTHONPATH=${MEGATRON_PATCH_PATH}:${MEGATRON_PATCH_PATH}/backends/megatron/Megatron-LM-250624:$PYTHONPATH
+export PYTHONPATH=${MEGATRON_PATCH_PATH}:${MEGATRON_PATCH_PATH}/backends/megatron/Megatron-LM-20250707:$PYTHONPATH
 export CUDA_DEVICE_MAX_CONNECTIONS=1
 export TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=true # for PyTorch >= 2.6
 
@@ -12,7 +12,8 @@ if [ $ENV = dsw ]; then
     MASTER_PORT=$(shuf -n 1 -i 10000-65535)
     NNODES=1
     NODE_RANK=0
-    GPUS_PER_NODE=`python -c "import torch; print(torch.cuda.device_count())"`
+    #GPUS_PER_NODE=`python -c "import torch; print(torch.cuda.device_count())"`
+    GPUS_PER_NODE=1
 elif [ $ENV = dlc ]; then
     NNODES=${WORLD_SIZE}
     NODE_RANK=${RANK}
@@ -59,6 +60,7 @@ WARMUP_TOKENS=${26}
 ###############################
 
 OUTPUT_BASEPATH=${27}
+CONFIG_PATH=${28}
 ### OTHERS ###
 
 
@@ -75,7 +77,8 @@ elif [ $FL = false ]; then
 fi
 
 if [ $MODEL_SIZE = 0.6B ]; then
-    NUM_LAYERS=28
+    #NUM_LAYERS=28
+    NUM_LAYERS=4
     HIDDEN_SIZE=1024
     NUM_ATTENTION_HEADS=16
     INTERMEDIATE_SIZE=3072
@@ -433,9 +436,12 @@ mkdir -p ${TENSORBOARD_DIR}
 SAVED_PRETRAIN_CHECKPOINT_PATH="${OUTPUT_BASEPATH}/checkpoint/${NAME}"
 
 mkdir -p ${SAVED_PRETRAIN_CHECKPOINT_PATH}
-find -L ${PRETRAIN_CHECKPOINT_PATH} -maxdepth 1 -type f -name "*.json" -print0 | xargs -0 cp -t ${SAVED_PRETRAIN_CHECKPOINT_PATH}
-find -L ${PRETRAIN_CHECKPOINT_PATH} -maxdepth 1 -type f -name "merges.txt" -print0 | xargs -0 cp -t ${SAVED_PRETRAIN_CHECKPOINT_PATH}
+#find -L ${PRETRAIN_CHECKPOINT_PATH} -maxdepth 1 -type f -name "*.json" -print0 | xargs -0 cp -t ${SAVED_PRETRAIN_CHECKPOINT_PATH}
+#find -L ${PRETRAIN_CHECKPOINT_PATH} -maxdepth 1 -type f -name "merges.txt" -print0 | xargs -0 cp -t ${SAVED_PRETRAIN_CHECKPOINT_PATH}
 
+find -L ${CONFIG_PATH} -maxdepth 1 -type f -name "*.json" -print0 | xargs -0 cp -t ${SAVED_PRETRAIN_CHECKPOINT_PATH}
+find -L ${CONFIG_PATH} -maxdepth 1 -type f -name "merges.txt" -print0 | xargs -0 cp -t ${SAVED_PRETRAIN_CHECKPOINT_PATH}
+#
 megatron_options="  \
         --save ${SAVED_PRETRAIN_CHECKPOINT_PATH} \
         --lr ${LR} \
@@ -474,7 +480,7 @@ megatron_options="  \
         --context-parallel-size ${CP} \
         --no-load-optim \
         --no-load-rng \
-        --num-workers 32 \
+        --num-workers 0 \
         --extra-vocab-size ${EXTRA_VOCAB_SIZE} \
         --patch-tokenizer-type Qwen3Tokenizer \
         --swiglu \
@@ -486,16 +492,18 @@ megatron_options="  \
         --rotary-base ${ROPE_THETA} \
         --no-save-optim \
         --ckpt-format torch_dist \
-        --transformer-impl transformer_engine \
+        --transformer-impl local \
         --cross-entropy-loss-fusion \
         --qk-layernorm \
         --kv-channels 128 \
-        --te-rng-tracker \
-        --external-cuda-graph \
-        --cuda-graph-scope attn \
         --recompute-granularity selective \
-        --recompute-modules moe
-
+        --recompute-modules moe \
+        --no-gradient-accumulation-fusion \
+	--no-persist-layer-norm \
+	--no-masked-softmax-fusion \
+	--no-rope-fusion \
+	--use-cpu-initialization \
+	--disable-gloo-process-groups
         "
 
 #        --add-qkv-bias \ # no qkv bias
