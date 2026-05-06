@@ -187,7 +187,6 @@ def model_provider(pre_process=True, post_process=True) -> Union[GPTModel]:
     return model
 
 
-# ModelPerf: capture computational graph during training
 def _setup_modelperf_graph_capture(model):
     import sys
     import os
@@ -198,52 +197,43 @@ def _setup_modelperf_graph_capture(model):
     if modelperf_path not in sys.path:
         sys.path.insert(0, modelperf_path)
     try:
-        from modelperf.capture.module_hook import ModuleCapture
-        from modelperf.capture.comm_hook import install_communication_hooks
-        from modelperf.capture.graph import ComputationalGraph
+        from modelperf.capture.coordinator import CaptureCoordinator
 
-        graph = ComputationalGraph()
+        coordinator = CaptureCoordinator()
+        coordinator.attach(model)
+        coordinator.start()
 
-        module_capture = ModuleCapture(graph)
-        module_capture.capture(model)
+        _modelperf_captures['coordinator'] = coordinator
 
-        comm_capture = install_communication_hooks(graph)
-
-        _modelperf_captures['module'] = module_capture
-        _modelperf_captures['comm'] = comm_capture
-
-        module_capture.start()
-        comm_capture.start()
-
-        print_rank_0(f'[ModelPerf] Graph capture started: ModuleCapture + CommunicationCapture')
+        print_rank_0('[ModelPerf] Graph capture started with CaptureCoordinator (5-layer hooks)')
     except Exception as e:
         print_rank_0(f'[ModelPerf] Warning: Failed to start graph capture: {e}')
 
 
 def _stop_modelperf_graph_capture():
     try:
-        if 'module' in _modelperf_captures:
-            _modelperf_captures['module'].stop()
-        if 'comm' in _modelperf_captures:
-            _modelperf_captures['comm'].stop()
+        coordinator = _modelperf_captures.get('coordinator')
+        if coordinator is not None:
+            coordinator.stop()
 
-        import os
-        import json
-        modelperf_path = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))),
-            'ModelPerf'
-        )
-        export_dir = os.path.join(modelperf_path, 'examples', 'output', 'captured_graph')
-        os.makedirs(export_dir, exist_ok=True)
+            import os
+            import json
+            modelperf_path = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))),
+                'ModelPerf'
+            )
+            export_dir = os.path.join(modelperf_path, 'examples', 'output', 'captured_graph')
+            os.makedirs(export_dir, exist_ok=True)
 
-        graph = _modelperf_captures.get('module')
-        if graph is not None:
-            graph_obj = graph.get_graph()
+            graph_obj = coordinator.get_graph()
             graph_path = os.path.join(export_dir, 'computational_graph.json')
             with open(graph_path, 'w') as f:
                 json.dump(graph_obj.to_dict(), f, indent=2)
-            print_rank_0(f'[ModelPerf] Graph exported to {graph_path}: '
-                         f'{len(graph_obj.nodes)} nodes, {len(graph_obj.get_comm_nodes())} comm')
+            print_rank_0(
+                f'[ModelPerf] Graph exported to {graph_path}: '
+                f'{len(graph_obj.nodes)} nodes, {len(graph_obj.get_comm_nodes())} comm, '
+                f'{len(graph_obj.get_compute_nodes())} compute'
+            )
     except Exception as e:
         print_rank_0(f'[ModelPerf] Warning: Failed to export graph: {e}')
 
