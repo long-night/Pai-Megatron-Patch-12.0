@@ -27,7 +27,7 @@ OPTIMIZER_OFFLOAD=false          # $20 Optimizer Offload: false, 或 0~1 小数�
 # ============ 训练模式 ============
 SFT=false                        # $18 是否微调训练: true(SFT), false(预训练)
 # ============ 训练进度 ============
-TRAIN_TOKENS_OR_ITERS=1280     # $25 训练 Token 数或迭代数, 预训是Tokens，SFT是迭代数 下同
+TRAIN_TOKENS_OR_ITERS=640     # $25 训练 Token 数或迭代数, 预训是Tokens，SFT是迭代数 下同
 WARMUP_TOKENS_OR_ITERS=128      # $26 预热 Token 数或迭代数
 SAVE_INTERVAL=100000              # $21 保存 checkpoint 间隔 (迭代)
 # ============ 数据路径 ============

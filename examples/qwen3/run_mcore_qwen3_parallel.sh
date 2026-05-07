@@ -13,7 +13,7 @@ if [ $ENV = dsw ]; then
     NNODES=1
     NODE_RANK=0
     #GPUS_PER_NODE=`python -c "import torch; print(torch.cuda.device_count())"`
-    GPUS_PER_NODE=1
+    GPUS_PER_NODE=${GPUS_PER_NODE:-1}
 elif [ $ENV = dlc ]; then
     NNODES=${WORLD_SIZE}
     NODE_RANK=${RANK}
@@ -75,6 +75,7 @@ elif [ $FL = false ]; then
         --attention-backend fused
     "
 fi
+
 if [ $MODEL_SIZE = 0.6B ]; then
     #NUM_LAYERS=28
     NUM_LAYERS=2

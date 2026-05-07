@@ -199,13 +199,13 @@ def _setup_modelperf_graph_capture(model):
     try:
         from modelperf.capture.coordinator import CaptureCoordinator
 
-        coordinator = CaptureCoordinator()
+        coordinator = CaptureCoordinator(use_aten_mode=True)
         coordinator.attach(model)
         coordinator.start()
 
         _modelperf_captures['coordinator'] = coordinator
 
-        print_rank_0('[ModelPerf] Graph capture started with CaptureCoordinator (5-layer hooks)')
+        print_rank_0('[ModelPerf] Graph capture started with CaptureCoordinator (Aten-level mode)')
     except Exception as e:
         print_rank_0(f'[ModelPerf] Warning: Failed to start graph capture: {e}')
 
@@ -218,6 +218,7 @@ def _stop_modelperf_graph_capture():
 
             import os
             import json
+            from collections import Counter
             modelperf_path = os.path.join(
                 os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))),
                 'ModelPerf'
@@ -226,14 +227,65 @@ def _stop_modelperf_graph_capture():
             os.makedirs(export_dir, exist_ok=True)
 
             graph_obj = coordinator.get_graph()
-            graph_path = os.path.join(export_dir, 'computational_graph.json')
+
+            rank = 0
+            dp_rank = 0
+            tp_rank = 0
+            pp_rank = 0
+            dp_size = 1
+            tp_size = 1
+            pp_size = 1
+            try:
+                import torch.distributed as dist
+                if dist.is_initialized():
+                    rank = dist.get_rank()
+                    try:
+                        from megatron.core import parallel_state as mpu
+                        dp_rank = mpu.get_data_parallel_rank()
+                        tp_rank = mpu.get_tensor_model_parallel_rank()
+                        pp_rank = mpu.get_pipeline_model_parallel_rank()
+                        dp_size = mpu.get_data_parallel_world_size()
+                        tp_size = mpu.get_tensor_model_parallel_world_size()
+                        pp_size = mpu.get_pipeline_model_parallel_world_size()
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+            parallel_identity = {
+                'world_rank': rank,
+                'dp_rank': dp_rank,
+                'tp_rank': tp_rank,
+                'pp_rank': pp_rank,
+                'dp_size': dp_size,
+                'tp_size': tp_size,
+                'pp_size': pp_size,
+            }
+            graph_obj.parallel_identity = parallel_identity
+
+            graph_path = os.path.join(
+                export_dir,
+                f'computational_graph_pp{pp_rank}_tp{tp_rank}_dp{dp_rank}.json'
+            )
             with open(graph_path, 'w') as f:
                 json.dump(graph_obj.to_dict(), f, indent=2)
+
+            aten_nodes = [n for n in graph_obj.nodes.values() if str(n.op_type).startswith('aten')]
+            comm_nodes = graph_obj.get_comm_nodes()
+            forward_nodes = [n for n in aten_nodes if n.node_type.value == 'compute']
+            backward_nodes = [n for n in aten_nodes if n.node_type.value == 'backward']
+            optimizer_nodes = [n for n in aten_nodes if n.node_type.value == 'optimizer']
+            top_ops = Counter(n.op_type for n in aten_nodes).most_common(10)
+
             print_rank_0(
                 f'[ModelPerf] Graph exported to {graph_path}: '
-                f'{len(graph_obj.nodes)} nodes, {len(graph_obj.get_comm_nodes())} comm, '
-                f'{len(graph_obj.get_compute_nodes())} compute'
+                f'{len(graph_obj.nodes)} total nodes, '
+                f'{len(forward_nodes)} forward ATen ops, '
+                f'{len(backward_nodes)} backward ATen ops, '
+                f'{len(optimizer_nodes)} optimizer ATen ops, '
+                f'{len(comm_nodes)} comm ops'
             )
+            print_rank_0(f'[ModelPerf] Top ATen ops: {top_ops}')
     except Exception as e:
         print_rank_0(f'[ModelPerf] Warning: Failed to export graph: {e}')
 
