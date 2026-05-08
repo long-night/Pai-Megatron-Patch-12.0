@@ -512,10 +512,21 @@ megatron_options="  \
 #       --decoder-first-pipeline-num-layers 10
 #         --te-rng-tracker \         --external-cuda-graph \        --cuda-graph-scope attn
 
+if [ "${ENABLE_PROFILE}" = "true" ]; then
+    PROFILE_STEP_START=${PROFILE_STEP_START:-3}
+    PROFILE_STEP_END=${PROFILE_STEP_END:-5}
+    profile_options=" \
+        --profile \
+        --use-pytorch-profiler \
+        --profile-step-start ${PROFILE_STEP_START} \
+        --profile-step-end ${PROFILE_STEP_END}"
+else
+    profile_options=""
+fi
 
 run_cmd="torchrun $DISTRIBUTED_ARGS pretrain_qwen.py
  ${megatron_options} ${dataset_options} ${pr_options} ${load_option} ${activation_checkpoint_options} \
- ${do_option} ${sp_option} ${moe_options} ${offload_option} ${sft_options} ${vp_option} ${packing_options} ${uneven_split_option} ${attn_backend_option} ${tie_option} ${gqa_options}"
+ ${do_option} ${sp_option} ${moe_options} ${offload_option} ${sft_options} ${vp_option} ${packing_options} ${uneven_split_option} ${attn_backend_option} ${tie_option} ${gqa_options} ${profile_options}"
 
 echo ${run_cmd}
 eval ${run_cmd}
